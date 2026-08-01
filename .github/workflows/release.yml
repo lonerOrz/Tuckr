@@ -1,0 +1,101 @@
+# Created based on information from `https://dzfrias.dev/blog/deploy-rust-cross-platform-github-actions/``
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: Build and upload
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - build: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: false
+
+          - build: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
+            
+          - build: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            cross: false
+
+          - build: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            cross: true
+
+          - build: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+            
+          - build: windows-aarch64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Get the release version from the tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Install Rust
+        uses: step-security/actions-rs-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build
+        uses: step-security/actions-rs-cargo@v1
+        with:
+          use-cross: ${{ matrix.cross }}
+          command: build
+          args: --verbose --release --target ${{ matrix.target }}
+
+      - name: Build archive
+        shell: bash
+        run: |
+          BINARY="tuckr"
+          ARCHIVE="$BINARY-${{ env.VERSION }}-${{ matrix.target }}"
+
+          mkdir "$ARCHIVE"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            mv "target/${{ matrix.target }}/release/$BINARY.exe" "$ARCHIVE"
+          else
+            mv "target/${{ matrix.target }}/release/$BINARY" "$ARCHIVE"
+          fi
+
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "$ARCHIVE.zip" "$ARCHIVE"
+            certutil -hashfile "$ARCHIVE.zip" SHA256 > "$ARCHIVE.zip.sha256"
+            echo "ASSET=$ARCHIVE.zip" >> $GITHUB_ENV
+            echo "ASSET_SUM=$ARCHIVE.zip.sha256" >> $GITHUB_ENV
+          else
+            tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+            shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+            echo "ASSET=$ARCHIVE.tar.gz" >> $GITHUB_ENV
+            echo "ASSET_SUM=$ARCHIVE.tar.gz.sha256" >> $GITHUB_ENV
+          fi
+
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET_SUM }}
